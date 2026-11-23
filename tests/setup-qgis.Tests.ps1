@@ -109,11 +109,30 @@ Test-Case 'cache key separates signature-checked trees from unchecked ones' {
 }
 
 # Real certificates, so the check sees the subject exactly as Get-AuthenticodeSignature hands it over.
-function Get-TestCertificate([string] $Subject) {
+# $Subject is DN text, or an X500DistinguishedName for what the text parsers disagree on.
+function Get-TestCertificate($Subject) {
     $rsa = [Security.Cryptography.RSA]::Create(2048)
     $req = [Security.Cryptography.X509Certificates.CertificateRequest]::new(
         $Subject, $rsa, [Security.Cryptography.HashAlgorithmName]::SHA256, [Security.Cryptography.RSASignaturePadding]::Pkcs1)
     $req.CreateSelfSigned([datetimeoffset]::UtcNow.AddMinutes(-1), [datetimeoffset]::UtcNow.AddDays(1))
+}
+# DER-encoded DN from RDNs given as arrays of (oid, value) pairs. Windows parses "CN=x + O=y" as a
+# multi-valued RDN, .NET on Linux as one CN value, so multi-valued RDNs are built here instead.
+function New-DistinguishedName([object[][]] $Rdns) {
+    $w = [Formats.Asn1.AsnWriter]::new([Formats.Asn1.AsnEncodingRules]::DER)
+    $null = $w.PushSequence()
+    foreach ($rdn in $Rdns) {
+        $null = $w.PushSetOf()
+        foreach ($atv in $rdn) {
+            $null = $w.PushSequence()
+            $w.WriteObjectIdentifier($atv[0])
+            $w.WriteCharacterString([Formats.Asn1.UniversalTagNumber]::UTF8String, $atv[1])
+            $w.PopSequence()
+        }
+        $w.PopSetOf()
+    }
+    $w.PopSequence()
+    [Security.Cryptography.X509Certificates.X500DistinguishedName]::new($w.Encode())
 }
 Test-Case 'signer check accepts both OSGeo certificate subject styles' {
     Assert-Equal $true (Test-OsgeoSigner (Get-TestCertificate 'CN=THE OPEN SOURCE GEOSPATIAL FOUNDATION, O=THE OPEN SOURCE GEOSPATIAL FOUNDATION, L=Beaverton, S=Oregon, C=US'))
@@ -124,11 +143,17 @@ Test-Case 'signer check rejects other organizations, including look-alikes insid
         'CN=x, O=The Open Source Geospatial Foundation Fake, C=US',
         'C=US, O=Evil Corp, CN="Evil, O=The Open Source Geospatial Foundation"',
         'L="Beaverton, O=The Open Source Geospatial Foundation, x", O=Evil Corp',
-        'CN=The Open Source Geospatial Foundation, C=US',
-        # A second O hidden in a multi-valued RDN.
-        'O=The Open Source Geospatial Foundation, CN=x + O=Evil Corp') {
+        'CN=The Open Source Geospatial Foundation, C=US') {
         if (Test-OsgeoSigner (Get-TestCertificate $subject)) { throw "accepted '$subject'" }
     }
+}
+Test-Case 'signer check rejects a second O hidden in a multi-valued RDN' {
+    $osgeo = [object[]] @('2.5.4.10', 'The Open Source Geospatial Foundation')
+    $cn = [object[]] @('2.5.4.3', 'x')
+    $evil = [object[]] @('2.5.4.10', 'Evil Corp')
+    $dn = New-DistinguishedName ([object[][]] @([object[]] @(, $osgeo), [object[]] @($cn, $evil)))
+    Assert-Equal $true ([bool]($dn.EnumerateRelativeDistinguishedNames() | Where-Object HasMultipleElements))
+    Assert-Equal $false (Test-OsgeoSigner (Get-TestCertificate $dn))
 }
 
 Test-Case 'install-dir rejects control characters, wildcards and cmd metacharacters' {
