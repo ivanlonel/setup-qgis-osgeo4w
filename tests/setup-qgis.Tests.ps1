@@ -109,10 +109,21 @@ Test-Case 'signer check accepts both certificate subject styles' {
     Assert-Equal $false (Test-OsgeoSigner 'CN=x, O=The Open Source Geospatial Foundation Fake, C=US')
 }
 
-Test-Case 'action.yml description fits the Marketplace limit (< 125 chars, one line)' {
-    $m = [regex]::Match((Get-Content -Raw (Join-Path $PSScriptRoot '..' 'action.yml')), '(?m)^description: ([^>|\s].*)$')  # not a >- / | block scalar
+# The Marketplace rejects a top-level description of 125+ chars. Without a YAML parser, insist on one
+# plain line, so what the regex measures is the whole value.
+function Assert-MarketplaceDescription([string] $Yaml) {
+    # Not a block scalar (>- |), not a comment (null), and the next line starts a new key.
+    $m = [regex]::Match($Yaml, '(?m)^description: ([^>|#\s].*?)\r?\n(?=\S)')
     if (-not $m.Success) { throw 'top-level description must be a single plain line' }
     if ($m.Groups[1].Value.Length -ge 125) { throw "description is $($m.Groups[1].Value.Length) chars" }
+}
+Test-Case 'action.yml description fits the Marketplace limit (< 125 chars, one line)' {
+    Assert-MarketplaceDescription (Get-Content -Raw (Join-Path $PSScriptRoot '..' 'action.yml'))
+}
+Test-Case 'description check rejects folded continuations and empty values' {
+    Assert-Throw { Assert-MarketplaceDescription "name: n`ndescription: $('x' * 100)`n  continued past the limit`nauthor: a`n" } 'single plain line'
+    Assert-Throw { Assert-MarketplaceDescription "name: n`ndescription: # todo`nauthor: a`n" } 'single plain line'
+    Assert-Throw { Assert-MarketplaceDescription "name: n`ndescription: >-`n  short`nauthor: a`n" } 'single plain line'
 }
 
 $pwshExe = (Get-Process -Id $PID).Path
