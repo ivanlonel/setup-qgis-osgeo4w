@@ -118,7 +118,7 @@ function Get-TestCertificate($Subject) {
 }
 # DER-encoded DN from RDNs given as arrays of (oid, value) pairs. Windows parses "CN=x + O=y" as a
 # multi-valued RDN, .NET on Linux as one CN value, so multi-valued RDNs are built here instead.
-function New-DistinguishedName([object[][]] $Rdns) {
+function ConvertTo-DistinguishedName([object[][]] $Rdns) {
     $w = [Formats.Asn1.AsnWriter]::new([Formats.Asn1.AsnEncodingRules]::DER)
     $null = $w.PushSequence()
     foreach ($rdn in $Rdns) {
@@ -151,7 +151,7 @@ Test-Case 'signer check rejects a second O hidden in a multi-valued RDN' {
     $osgeo = [object[]] @('2.5.4.10', 'The Open Source Geospatial Foundation')
     $cn = [object[]] @('2.5.4.3', 'x')
     $evil = [object[]] @('2.5.4.10', 'Evil Corp')
-    $dn = New-DistinguishedName ([object[][]] @([object[]] @(, $osgeo), [object[]] @($cn, $evil)))
+    $dn = ConvertTo-DistinguishedName ([object[][]] @([object[]] @(, $osgeo), [object[]] @($cn, $evil)))
     Assert-Equal $true ([bool]($dn.EnumerateRelativeDistinguishedNames() | Where-Object HasMultipleElements))
     Assert-Equal $false (Test-OsgeoSigner (Get-TestCertificate $dn))
 }
