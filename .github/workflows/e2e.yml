@@ -34,7 +34,9 @@ jobs:
           # The others hit the default branch's cache once it is warm, which skips download,
           # verification and msiexec. This one installs into a per-run directory, so its key is
           # new every run: the cold pass must do the full install and save, the warm pass restore it.
-          - case: pinned, fresh install
+          # Its ~0.7 GB entry is never read again; eviction goes by last access, so these go first
+          # and the shared entries above (read every run) stay.
+          - case: pinned
             runner: windows-2025
             installer: QGIS-OSGeo4W-3.44.16-1
             sha256: 6d1dc453ab537b2bba53194e6d240d9aa56e04d4a08b6194aebc2c0176562621
@@ -70,6 +72,9 @@ jobs:
           EXPECT_PACKAGE: ${{ matrix.expect-package }}
           EXPECT_CACHE_HIT: ${{ inputs.expect-cache-hit }}
           EXPECT_ROOT: ${{ matrix.per-run-dir && format('C:\sqo-{0}', github.run_id) || '' }}
+          # A re-run keeps run_id (so the warm pass still finds the tree) and with it the saved
+          # entry, so only the first attempt is guaranteed a fresh install.
+          EXPECT_FRESH: ${{ matrix.per-run-dir && !inputs.expect-cache-hit && github.run_attempt == '1' }}
         run: |
           $ErrorActionPreference = 'Stop'
           Get-ChildItem env:OUT_* | Format-Table -AutoSize Name, Value | Out-String -Width 250 | Write-Host
@@ -82,10 +87,8 @@ jobs:
           if ($env:EXPECT_VERSION_PREFIX) { Assert ($env:OUT_VERSION.StartsWith("$env:EXPECT_VERSION_PREFIX.")) "expected $env:EXPECT_VERSION_PREFIX.x" }
           if ($env:EXPECT_PACKAGE) { Assert ((Split-Path -Leaf $env:OUT_PREFIX) -eq $env:EXPECT_PACKAGE) "expected apps\$env:EXPECT_PACKAGE" }
           if ($env:EXPECT_CACHE_HIT -eq 'true') { Assert ($env:OUT_CACHE_HIT -eq 'true') 'expected a cache hit' }
-          if ($env:EXPECT_ROOT) {
-            Assert ($env:OUT_ROOT -eq $env:EXPECT_ROOT) "expected root $env:EXPECT_ROOT"
-            if ($env:EXPECT_CACHE_HIT -ne 'true') { Assert ($env:OUT_CACHE_HIT -eq 'false') 'expected a fresh install (cache miss)' }
-          }
+          if ($env:EXPECT_ROOT) { Assert ($env:OUT_ROOT -eq $env:EXPECT_ROOT) "expected root $env:EXPECT_ROOT" }
+          if ($env:EXPECT_FRESH -eq 'true') { Assert ($env:OUT_CACHE_HIT -eq 'false') 'expected a fresh install (cache miss)' }
           & $env:OUT_QGIS_PROCESS --version
           Assert ($LASTEXITCODE -eq 0) "qgis_process exited $LASTEXITCODE"
 

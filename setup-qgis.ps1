@@ -99,18 +99,21 @@ function Get-CacheKey([string] $Installer, [string] $Sha256, [string] $InstallDi
 # ", O=The Open Source Geospatial Foundation".
 function Test-OsgeoSigner([Security.Cryptography.X509Certificates.X509Certificate2] $Certificate) {
     if (-not $Certificate) { return $false }
-    $orgs = @($Certificate.SubjectName.EnumerateRelativeDistinguishedNames() | Where-Object {
-            -not $_.HasMultipleElements -and $_.GetSingleElementType().Value -eq '2.5.4.10'
-        } | ForEach-Object { $_.GetSingleElementValue() })
+    $rdns = @($Certificate.SubjectName.EnumerateRelativeDistinguishedNames())
+    # .NET can't read inside a multi-valued RDN (where a second O= could hide); OSGeo's never has one.
+    if ($rdns | Where-Object HasMultipleElements) { return $false }
+    $orgs = @($rdns | Where-Object { $_.GetSingleElementType().Value -eq '2.5.4.10' } | ForEach-Object { $_.GetSingleElementValue() })
     $orgs.Count -eq 1 -and $orgs[0] -eq 'The Open Source Geospatial Foundation'
 }
 
 # Absolute, normalized, no trailing backslash. A drive or share root is refused: the bad-cache
 # fallback deletes the install dir, and "C:\" trimmed to "C:" means the current directory.
-# Control characters would forge step outputs; * ? [ ] are globs to actions/cache and Get-ChildItem.
+# Control characters would forge step outputs; * ? [ ] are globs to actions/cache and Get-ChildItem;
+# " breaks the msiexec command line, and % & ^ ! < > | are live in cmd, including in OSGeo4W's own
+# .bat files, which expand the root unquoted (pushd %~dp0, path %OSGEO4W_ROOT%\...).
 function Resolve-InstallDir([string] $Value, [string] $Release, [string] $ProgramFiles = $env:ProgramFiles) {
     if (-not $Value) { return Join-Path $ProgramFiles "QGIS $Release" }
-    if ($Value -match '[\x00-\x1f*?\[\]]') { throw "Invalid install-dir: control characters and * ? [ ] are not allowed." }
+    if ($Value -match '[\x00-\x1f*?\[\]"%&^!<>|]') { throw 'Invalid install-dir: control characters and * ? [ ] " % & ^ ! < > | are not allowed.' }
     if (-not [IO.Path]::IsPathFullyQualified($Value)) { throw "Invalid install-dir '$Value': expected an absolute path." }
     $full = [IO.Path]::GetFullPath($Value)
     if ([IO.Path]::GetPathRoot($full).TrimEnd('\') -eq $full.TrimEnd('\')) {

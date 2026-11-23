@@ -124,14 +124,23 @@ Test-Case 'signer check rejects other organizations, including look-alikes insid
         'CN=x, O=The Open Source Geospatial Foundation Fake, C=US',
         'C=US, O=Evil Corp, CN="Evil, O=The Open Source Geospatial Foundation"',
         'L="Beaverton, O=The Open Source Geospatial Foundation, x", O=Evil Corp',
-        'CN=The Open Source Geospatial Foundation, C=US') {
+        'CN=The Open Source Geospatial Foundation, C=US',
+        # A second O hidden in a multi-valued RDN.
+        'O=The Open Source Geospatial Foundation, CN=x + O=Evil Corp') {
         if (Test-OsgeoSigner (Get-TestCertificate $subject)) { throw "accepted '$subject'" }
     }
 }
 
-Test-Case 'install-dir rejects control characters and wildcards' {
-    foreach ($bad in "C:\a`nb", "C:\a`tb", 'C:\QGIS [ci]', 'C:\QGIS*', 'C:\QGIS?') {
+Test-Case 'install-dir rejects control characters, wildcards and cmd metacharacters' {
+    # OSGeo4W's own .bat files expand the root unquoted (pushd %~dp0, path %OSGEO4W_ROOT%\...).
+    foreach ($bad in "C:\a`nb", "C:\a`tb", 'C:\QGIS [ci]', 'C:\QGIS*', 'C:\QGIS?',
+        'C:\a&calc', 'C:\a%PATH%b', 'C:\a" /x evil.msi "b', 'C:\a^b', 'C:\a!b', 'C:\a|b', 'C:\a<b', 'C:\a>b') {
         Assert-Throw { Resolve-InstallDir -Value $bad -Release '4.4.0' } 'not allowed'
+    }
+}
+if ($IsWindows) {
+    Test-Case 'install-dir keeps ordinary punctuation' {
+        Assert-Equal 'C:\R(x) - QGIS_1.2' (Resolve-InstallDir -Value 'C:\R(x) - QGIS_1.2' -Release '4.4.0')
     }
 }
 if ($IsWindows) {

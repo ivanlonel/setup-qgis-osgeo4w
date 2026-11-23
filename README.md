@@ -72,18 +72,18 @@ The Grids variant (bundled datum-shift grids), or any installer by file name:
 
 ## Inputs
 
-| Input                      | Default                         | Description                                                                                    |
-| -------------------------- | ------------------------------- | ---------------------------------------------------------------------------------------------- |
-| `version`                  | latest                          | `4`, `4.2`, `4.2.3` or an exact build `4.2.3-2`. Empty or `latest` = the newest build.         |
-| `flavor`                   | `standard`                      | `standard` (`QGIS-OSGeo4W-*`) or `grids` (`QGIS-Grids-OSGeo4W-*`).                             |
-| `installer`                |                                 | Exact file name, e.g. `QGIS-Grids-OSGeo4W-4.2.3-2`. Excludes `version` and `flavor`.           |
-| `sha256`                   |                                 | Expected SHA-256 of the MSI. Needs an exact build (`version: x.y.z-r` or `installer`).         |
-| `install-dir`              | `C:\Program Files\QGIS <x.y.z>` | Absolute install directory (the MSI's own default when empty). Not a drive root; no `* ? [ ]`. |
-| `cache`                    | `true`                          | Cache the installed tree.                                                                      |
-| `verify-signature`         | `true`                          | Require a valid Authenticode signature by The Open Source Geospatial Foundation.               |
-| `add-to-path`              | `false`                         | Prepend `<root>\bin` (the OSGeo4W tools: `gdalinfo`, `ogr2ogr`, …) to `PATH`.                  |
-| `download-timeout-minutes` | `30`                            | Budget for the listing, `.sha256sum` and MSI downloads, retries included. `0` = none.          |
-| `install-timeout-minutes`  | `20`                            | Budget for `msiexec` plus the `qgis_process` check. `0` = none.                                |
+| Input                      | Default                         | Description                                                                                                                                                    |
+| -------------------------- | ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `version`                  | latest                          | `4`, `4.2`, `4.2.3` or an exact build `4.2.3-2`. Empty or `latest` = the newest build.                                                                         |
+| `flavor`                   | `standard`                      | `standard` (`QGIS-OSGeo4W-*`) or `grids` (`QGIS-Grids-OSGeo4W-*`).                                                                                             |
+| `installer`                |                                 | Exact file name, e.g. `QGIS-Grids-OSGeo4W-4.2.3-2`. Excludes `version` and `flavor`.                                                                           |
+| `sha256`                   |                                 | Expected SHA-256 of the MSI. Needs an exact build (`version: x.y.z-r` or `installer`).                                                                         |
+| `install-dir`              | `C:\Program Files\QGIS <x.y.z>` | Absolute install directory (the MSI's own default when empty). Not a drive root; no wildcards (`* ? [ ]`), quotes or cmd metacharacters (`% & ^ ! < >`, pipe). |
+| `cache`                    | `true`                          | Cache the installed tree.                                                                                                                                      |
+| `verify-signature`         | `true`                          | Require a valid Authenticode signature by The Open Source Geospatial Foundation.                                                                               |
+| `add-to-path`              | `false`                         | Prepend `<root>\bin` (the OSGeo4W tools: `gdalinfo`, `ogr2ogr`, …) to `PATH`.                                                                                  |
+| `download-timeout-minutes` | `30`                            | Budget for the listing, `.sha256sum` and MSI downloads, retries included. `0` = none.                                                                          |
+| `install-timeout-minutes`  | `20`                            | Budget for `msiexec` plus the `qgis_process` check. `0` = none.                                                                                                |
 
 ### How `version` is resolved
 
