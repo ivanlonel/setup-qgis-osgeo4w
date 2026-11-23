@@ -53,8 +53,18 @@ jobs:
     permissions:
       contents: read
 
-    # $/ resolves this repository at the running commit, no checkout needed.
     steps:
+      # Only for the self-check below; the action itself comes from $/ (the running commit).
+      - name: Get source code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Again on Windows: the install-dir path rules (roots, drive-relative paths) are Windows-only.
+      - name: Run the offline self-check on Windows
+        shell: pwsh
+        run: ./tests/setup-qgis.Tests.ps1
+
       - name: sha256 with a prefix
         id: prefix-pin
         continue-on-error: true
@@ -92,6 +102,20 @@ jobs:
         with:
           install-dir: QGIS
 
+      - name: drive root as install-dir
+        id: root-dir
+        continue-on-error: true
+        uses: $/
+        with:
+          install-dir: 'C:\'
+
+      - name: wildcard in install-dir
+        id: wildcard-dir
+        continue-on-error: true
+        uses: $/
+        with:
+          install-dir: 'C:\QGIS [ci]'
+
       - name: build that does not exist
         id: missing-build
         continue-on-error: true
@@ -104,7 +128,8 @@ jobs:
         env:
           OUTCOMES: >-
             ${{ steps.prefix-pin.outcome }} ${{ steps.both-selectors.outcome }} ${{ steps.bad-flavor.outcome }}
-            ${{ steps.bad-timeout.outcome }} ${{ steps.relative-dir.outcome }} ${{ steps.missing-build.outcome }}
+            ${{ steps.bad-timeout.outcome }} ${{ steps.relative-dir.outcome }} ${{ steps.root-dir.outcome }}
+            ${{ steps.wildcard-dir.outcome }} ${{ steps.missing-build.outcome }}
         run: |
           if (-split $env:OUTCOMES | Where-Object { $_ -ne 'failure' }) { throw "Expected every case to fail: $env:OUTCOMES" }
 

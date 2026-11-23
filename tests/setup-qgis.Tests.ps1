@@ -1,6 +1,6 @@
-#Requires -Version 7.2
-# Offline self-check of the installer resolver: no network, no Pester (plain throws).
-# Run: pwsh -NoProfile -File tests/Resolve.Tests.ps1
+#Requires -Version 7.4
+# Offline self-check of setup-qgis.ps1's pure parts: no network, no Pester (plain throws).
+# Run: pwsh -NoProfile -File tests/setup-qgis.Tests.ps1
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
@@ -102,11 +102,48 @@ Test-Case 'cache key changes with path, sha and image' {
     Assert-Equal $true ($a -ne (Get-CacheKey -Installer 'QGIS-OSGeo4W-4.4.0-1.msi' -Sha256 ('b' * 64) -InstallDir 'C:\Program Files\QGIS 4.4.0' -ImageOS 'win25'))
     Assert-Equal $true ($a -ne (Get-CacheKey -Installer 'QGIS-OSGeo4W-4.4.0-1.msi' -Sha256 ('a' * 64) -InstallDir 'C:\Program Files\QGIS 4.4.0' -ImageOS 'win22'))
 }
-Test-Case 'signer check accepts both certificate subject styles' {
-    Assert-Equal $true (Test-OsgeoSigner 'CN=THE OPEN SOURCE GEOSPATIAL FOUNDATION, O=THE OPEN SOURCE GEOSPATIAL FOUNDATION, L=Beaverton, S=Oregon, C=US')
-    Assert-Equal $true (Test-OsgeoSigner 'CN=The Open Source Geospatial Foundation, OU=OSGeo Foundation, O=The Open Source Geospatial Foundation, L=Beaverton, S=Oregon, C=US')
-    Assert-Equal $false (Test-OsgeoSigner 'CN=The Open Source Geospatial Foundation, O=Evil Corp, C=US')
-    Assert-Equal $false (Test-OsgeoSigner 'CN=x, O=The Open Source Geospatial Foundation Fake, C=US')
+Test-Case 'cache key separates signature-checked trees from unchecked ones' {
+    $checked = Get-CacheKey -Installer 'QGIS-OSGeo4W-4.4.0-1.msi' -Sha256 ('a' * 64) -InstallDir 'C:\QGIS' -ImageOS 'win25' -SignatureChecked $true
+    $unchecked = Get-CacheKey -Installer 'QGIS-OSGeo4W-4.4.0-1.msi' -Sha256 ('a' * 64) -InstallDir 'C:\QGIS' -ImageOS 'win25' -SignatureChecked $false
+    Assert-Equal $true ($checked -ne $unchecked)
+}
+
+# Real certificates, so the check sees the subject exactly as Get-AuthenticodeSignature hands it over.
+function Get-TestCertificate([string] $Subject) {
+    $rsa = [Security.Cryptography.RSA]::Create(2048)
+    $req = [Security.Cryptography.X509Certificates.CertificateRequest]::new(
+        $Subject, $rsa, [Security.Cryptography.HashAlgorithmName]::SHA256, [Security.Cryptography.RSASignaturePadding]::Pkcs1)
+    $req.CreateSelfSigned([datetimeoffset]::UtcNow.AddMinutes(-1), [datetimeoffset]::UtcNow.AddDays(1))
+}
+Test-Case 'signer check accepts both OSGeo certificate subject styles' {
+    Assert-Equal $true (Test-OsgeoSigner (Get-TestCertificate 'CN=THE OPEN SOURCE GEOSPATIAL FOUNDATION, O=THE OPEN SOURCE GEOSPATIAL FOUNDATION, L=Beaverton, S=Oregon, C=US'))
+    Assert-Equal $true (Test-OsgeoSigner (Get-TestCertificate 'CN=The Open Source Geospatial Foundation, OU=OSGeo Foundation, O=The Open Source Geospatial Foundation, L=Beaverton, S=Oregon, C=US'))
+}
+Test-Case 'signer check rejects other organizations, including look-alikes inside quoted fields' {
+    foreach ($subject in 'CN=The Open Source Geospatial Foundation, O=Evil Corp, C=US',
+        'CN=x, O=The Open Source Geospatial Foundation Fake, C=US',
+        'C=US, O=Evil Corp, CN="Evil, O=The Open Source Geospatial Foundation"',
+        'L="Beaverton, O=The Open Source Geospatial Foundation, x", O=Evil Corp',
+        'CN=The Open Source Geospatial Foundation, C=US') {
+        if (Test-OsgeoSigner (Get-TestCertificate $subject)) { throw "accepted '$subject'" }
+    }
+}
+
+Test-Case 'install-dir rejects control characters and wildcards' {
+    foreach ($bad in "C:\a`nb", "C:\a`tb", 'C:\QGIS [ci]', 'C:\QGIS*', 'C:\QGIS?') {
+        Assert-Throw { Resolve-InstallDir -Value $bad -Release '4.4.0' } 'not allowed'
+    }
+}
+if ($IsWindows) {
+    Test-Case 'install-dir defaults to the MSI default and is normalized' {
+        Assert-Equal 'C:\Program Files\QGIS 4.4.0' (Resolve-InstallDir -Value '' -Release '4.4.0' -ProgramFiles 'C:\Program Files')
+        Assert-Equal 'C:\QGIS' (Resolve-InstallDir -Value 'C:\QGIS\' -Release '4.4.0')
+        Assert-Equal 'C:\b' (Resolve-InstallDir -Value 'C:\a\..\b' -Release '4.4.0')
+    }
+    Test-Case 'install-dir rejects relative paths and drive or share roots' {
+        foreach ($bad in 'QGIS', 'D:', 'D:QGIS', '\QGIS') { Assert-Throw { Resolve-InstallDir -Value $bad -Release '4.4.0' } 'absolute' }
+        foreach ($bad in 'C:\', 'C:\.', '\\server\share', '\\server\share\') { Assert-Throw { Resolve-InstallDir -Value $bad -Release '4.4.0' } 'root' }
+    }
 }
 
 # The Marketplace rejects a top-level description of 125+ chars. Without a YAML parser, insist on one
@@ -139,10 +176,11 @@ Test-Case 'deadline already passed fails before starting' {
     Assert-Throw { Invoke-WithDeadline -FilePath $pwshExe -Arguments '-NoProfile -Command exit 0' -Deadline ([datetime]::UtcNow.AddSeconds(-1)) } 'timed out'
 }
 
-$tree = Join-Path ([IO.Path]::GetTempPath()) "sqo-$([guid]::NewGuid())"
+# '[ci]' in the path: the lookups must be literal, not wildcard patterns.
+$tree = Join-Path ([IO.Path]::GetTempPath()) "sqo [ci] $([guid]::NewGuid())"
 try {
-    foreach ($d in 'bin', 'apps/qgis-ltr', 'apps/Python312') { New-Item -ItemType Directory -Force (Join-Path $tree $d) | Out-Null }
-    foreach ($f in 'bin/qgis_process-qgis-ltr.bat', 'apps/Python312/python.exe') { New-Item -ItemType File (Join-Path $tree $f) | Out-Null }
+    foreach ($d in 'bin', 'apps/qgis-ltr', 'apps/Python312') { $null = [IO.Directory]::CreateDirectory((Join-Path $tree $d)) }
+    foreach ($f in 'bin/qgis_process-qgis-ltr.bat', 'apps/Python312/python.exe') { [IO.File]::WriteAllText((Join-Path $tree $f), '') }
     Test-Case 'layout of an installed tree (LTR build)' {
         $l = Get-QgisLayout $tree
         Assert-Equal (Join-Path $tree 'apps' 'qgis-ltr') $l.Prefix
@@ -150,11 +188,11 @@ try {
         Assert-Equal (Join-Path $tree 'apps' 'Python312' 'python.exe') $l.Python
     }
     Test-Case 'layout rejects an ambiguous tree' {
-        New-Item -ItemType File (Join-Path $tree 'bin/qgis_process-qgis.bat') | Out-Null
+        [IO.File]::WriteAllText((Join-Path $tree 'bin/qgis_process-qgis.bat'), '')
         Assert-Throw { Get-QgisLayout $tree } 'qgis_process'
     }
     Test-Case 'layout rejects an empty tree' { Assert-Throw { Get-QgisLayout (Join-Path $tree 'apps') } 'qgis_process' }
-} finally { Remove-Item -Recurse -Force $tree }
+} finally { Remove-Item -LiteralPath $tree -Recurse -Force }
 
 if ($script:failures) { Write-Host "`n$script:failures failure(s)"; exit 1 }
 Write-Host "`nall passed"

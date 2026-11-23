@@ -72,18 +72,18 @@ The Grids variant (bundled datum-shift grids), or any installer by file name:
 
 ## Inputs
 
-| Input                      | Default                         | Description                                                                            |
-| -------------------------- | ------------------------------- | -------------------------------------------------------------------------------------- |
-| `version`                  | latest                          | `4`, `4.2`, `4.2.3` or an exact build `4.2.3-2`. Empty or `latest` = the newest build. |
-| `flavor`                   | `standard`                      | `standard` (`QGIS-OSGeo4W-*`) or `grids` (`QGIS-Grids-OSGeo4W-*`).                     |
-| `installer`                |                                 | Exact file name, e.g. `QGIS-Grids-OSGeo4W-4.2.3-2`. Excludes `version` and `flavor`.   |
-| `sha256`                   |                                 | Expected SHA-256 of the MSI. Needs an exact build (`version: x.y.z-r` or `installer`). |
-| `install-dir`              | `C:\Program Files\QGIS <x.y.z>` | Absolute install directory (the MSI's own default when empty).                         |
-| `cache`                    | `true`                          | Cache the installed tree.                                                              |
-| `verify-signature`         | `true`                          | Require a valid Authenticode signature by The Open Source Geospatial Foundation.       |
-| `add-to-path`              | `false`                         | Prepend `<root>\bin` (the OSGeo4W tools: `gdalinfo`, `ogr2ogr`, …) to `PATH`.          |
-| `download-timeout-minutes` | `30`                            | Budget for the listing, `.sha256sum` and MSI downloads, retries included. `0` = none.  |
-| `install-timeout-minutes`  | `20`                            | Budget for `msiexec` plus the `qgis_process` check. `0` = none.                        |
+| Input                      | Default                         | Description                                                                                    |
+| -------------------------- | ------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `version`                  | latest                          | `4`, `4.2`, `4.2.3` or an exact build `4.2.3-2`. Empty or `latest` = the newest build.         |
+| `flavor`                   | `standard`                      | `standard` (`QGIS-OSGeo4W-*`) or `grids` (`QGIS-Grids-OSGeo4W-*`).                             |
+| `installer`                |                                 | Exact file name, e.g. `QGIS-Grids-OSGeo4W-4.2.3-2`. Excludes `version` and `flavor`.           |
+| `sha256`                   |                                 | Expected SHA-256 of the MSI. Needs an exact build (`version: x.y.z-r` or `installer`).         |
+| `install-dir`              | `C:\Program Files\QGIS <x.y.z>` | Absolute install directory (the MSI's own default when empty). Not a drive root; no `* ? [ ]`. |
+| `cache`                    | `true`                          | Cache the installed tree.                                                                      |
+| `verify-signature`         | `true`                          | Require a valid Authenticode signature by The Open Source Geospatial Foundation.               |
+| `add-to-path`              | `false`                         | Prepend `<root>\bin` (the OSGeo4W tools: `gdalinfo`, `ogr2ogr`, …) to `PATH`.                  |
+| `download-timeout-minutes` | `30`                            | Budget for the listing, `.sha256sum` and MSI downloads, retries included. `0` = none.          |
+| `install-timeout-minutes`  | `20`                            | Budget for `msiexec` plus the `qgis_process` check. `0` = none.                                |
 
 ### How `version` is resolved
 
@@ -110,8 +110,8 @@ The Grids variant (bundled datum-shift grids), or any installer by file name:
 
 The installed tree is saved with `actions/cache/save` right after a fresh install, before your own
 steps run, so it is saved even if your tests fail. The key covers the installer, its SHA-256, the
-install directory and the runner image, and on a hit the action restores the tree to the same path
-and only runs the `qgis_process` check.
+install directory, the runner image and whether the signature was checked, and on a hit the action
+restores the tree to the same path and only runs the `qgis_process` check.
 
 - Each tree is roughly 1 GB (Grids more), and a repository gets 10 GB of cache by default. Entries
   unused for 7 days are evicted.
@@ -128,6 +128,13 @@ and only runs the `qgis_process` check.
 - Without a `sha256` pin, the MSI is checked against the `.sha256sum` next to it on the server,
   which catches corruption but not a compromised server. The Authenticode check covers that.
   A pin additionally fails the run if the published file ever changes.
+- Those checks run on the MSI, so they protect fresh installs only. A **cache hit is not
+  re-verified**: the restored tree is trusted because of its key, and the key is computable from
+  public data. Anything that can write your repository's Actions cache can plant a tree under it:
+  any step of a workflow running on the default branch, including `pull_request_target`,
+  `workflow_run` or `issue_comment` jobs that build untrusted code, or a compromised action in
+  one of them. If that is a risk for a job that holds secrets or a write token, set
+  `cache: false` there.
 
 ## Limitations
 

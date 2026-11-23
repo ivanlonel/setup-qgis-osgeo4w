@@ -1,10 +1,10 @@
-#Requires -Version 7.2
+#Requires -Version 7.4
 <#
 .SYNOPSIS
     Resolves, verifies, installs and checks an official QGIS OSGeo4W MSI (setup-qgis-osgeo4w).
 .DESCRIPTION
     Called by action.yml with -Phase resolve|install. Dot-source without -Phase to load the functions
-    only (tests/Resolve.Tests.ps1 does that). Inputs arrive as INPUT_* environment variables.
+    only (tests/setup-qgis.Tests.ps1 does that). Inputs arrive as INPUT_* environment variables.
 #>
 param([ValidateSet('resolve', 'install')] [string] $Phase)
 
@@ -85,15 +85,38 @@ function Read-Sha256Sum([string] $Text, [string] $Installer) {
     $m.Groups[1].Value.ToLowerInvariant()
 }
 
-function Get-CacheKey([string] $Installer, [string] $Sha256, [string] $InstallDir, [string] $ImageOS) {
+# SignatureChecked keeps trees installed with verify-signature: false apart from checked ones, so a
+# job that skipped the check can't hand its tree to one that relies on it.
+function Get-CacheKey([string] $Installer, [string] $Sha256, [string] $InstallDir, [string] $ImageOS, [bool] $SignatureChecked = $true) {
     $dirHash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData(
             [Text.Encoding]::UTF8.GetBytes($InstallDir.TrimEnd('\').ToLowerInvariant()))).Substring(0, 8).ToLowerInvariant()
-    "setup-qgis-osgeo4w-$script:CacheFormat-$ImageOS-$($Installer -replace '\.msi$')-$Sha256-$dirHash"
+    $sig = if ($SignatureChecked) { 'sig' } else { 'nosig' }
+    "setup-qgis-osgeo4w-$script:CacheFormat-$ImageOS-$($Installer -replace '\.msi$')-$Sha256-$dirHash-$sig"
 }
 
-# OSGeo's certificate subject changed style over the years (case, OU); compare O= exactly, ignoring case.
-function Test-OsgeoSigner([string] $Subject) {
-    $Subject -match '(?:^|,\s*)O="?The Open Source Geospatial Foundation"?(?:,|$)'
+# Exactly one O= (organizationName, 2.5.4.10) attribute equal to OSGeo's name, ignoring case (the
+# subject's style changed over the years). Parsed, not matched as text: a quoted CN or L can contain
+# ", O=The Open Source Geospatial Foundation".
+function Test-OsgeoSigner([Security.Cryptography.X509Certificates.X509Certificate2] $Certificate) {
+    if (-not $Certificate) { return $false }
+    $orgs = @($Certificate.SubjectName.EnumerateRelativeDistinguishedNames() | Where-Object {
+            -not $_.HasMultipleElements -and $_.GetSingleElementType().Value -eq '2.5.4.10'
+        } | ForEach-Object { $_.GetSingleElementValue() })
+    $orgs.Count -eq 1 -and $orgs[0] -eq 'The Open Source Geospatial Foundation'
+}
+
+# Absolute, normalized, no trailing backslash. A drive or share root is refused: the bad-cache
+# fallback deletes the install dir, and "C:\" trimmed to "C:" means the current directory.
+# Control characters would forge step outputs; * ? [ ] are globs to actions/cache and Get-ChildItem.
+function Resolve-InstallDir([string] $Value, [string] $Release, [string] $ProgramFiles = $env:ProgramFiles) {
+    if (-not $Value) { return Join-Path $ProgramFiles "QGIS $Release" }
+    if ($Value -match '[\x00-\x1f*?\[\]]') { throw "Invalid install-dir: control characters and * ? [ ] are not allowed." }
+    if (-not [IO.Path]::IsPathFullyQualified($Value)) { throw "Invalid install-dir '$Value': expected an absolute path." }
+    $full = [IO.Path]::GetFullPath($Value)
+    if ([IO.Path]::GetPathRoot($full).TrimEnd('\') -eq $full.TrimEnd('\')) {
+        throw "Invalid install-dir '$Value': a drive or share root can't be the install directory."
+    }
+    $full.TrimEnd('\')
 }
 
 #endregion
@@ -129,11 +152,12 @@ function Get-Deadline([int] $Minutes) {
 function Get-QgisLayout([string] $Root) {
     $bats = @(Get-ChildItem -LiteralPath (Join-Path $Root 'bin') -Filter 'qgis_process-*.bat' -File -ErrorAction SilentlyContinue)
     if ($bats.Count -ne 1) { throw "Expected exactly one bin\qgis_process-*.bat under $Root, found $($bats.Count)." }
-    $python = Get-ChildItem -Path (Join-Path $Root 'apps' 'Python3*' 'python.exe') -File -ErrorAction SilentlyContinue | Select-Object -First 1
+    $python = Get-ChildItem -LiteralPath (Join-Path $Root 'apps') -Directory -Filter 'Python3*' -ErrorAction SilentlyContinue |
+        ForEach-Object { Join-Path $_.FullName 'python.exe' } | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
     [pscustomobject]@{
         Prefix      = Join-Path $Root 'apps' ($bats[0].BaseName -replace '^qgis_process-')
         QgisProcess = $bats[0].FullName
-        Python      = if ($python) { $python.FullName } else { '' }
+        Python      = if ($python) { $python } else { '' }
     }
 }
 
@@ -142,7 +166,9 @@ function Invoke-Download([string] $Url, [string] $OutFile, [datetime] $Deadline,
     # small files don't use --retry-all-errors, so a 404 fails at once instead of after 5 retries.
     $extra = if ($Large) { '--retry-all-errors --continue-at - --speed-limit 102400 --speed-time 60' } else { '--max-time 120' }
     $curl = (Get-Command curl -CommandType Application | Select-Object -First 1).Source
-    $code = Invoke-WithDeadline $curl "--fail --location --silent --show-error --retry 5 --retry-delay 5 $extra --user-agent setup-qgis-osgeo4w --output `"$OutFile`" `"$Url`"" $Deadline
+    # HTTPS only, redirects included: with verify-signature off and no pin, http would let both
+    # the .sha256sum and the MSI be swapped in transit.
+    $code = Invoke-WithDeadline $curl "--fail --location --proto =https --proto-redir =https --silent --show-error --retry 5 --retry-delay 5 $extra --user-agent setup-qgis-osgeo4w --output `"$OutFile`" `"$Url`"" $Deadline
     if ($code -eq 22) { throw "Download failed (HTTP error, e.g. 404 not found): $Url" }
     if ($code -ne 0) { throw "curl exited with code $code downloading $Url" }
 }
@@ -193,11 +219,12 @@ function Invoke-ResolvePhase {
     if (-not $IsWindows) { throw 'setup-qgis-osgeo4w runs on Windows runners only.' }
     $req = Resolve-Request -Version "$env:INPUT_VERSION".Trim() -Flavor "$env:INPUT_FLAVOR".Trim() `
         -Installer "$env:INPUT_INSTALLER".Trim() -Sha256 "$env:INPUT_SHA256".Trim()
-    foreach ($b in 'CACHE', 'VERIFY_SIGNATURE', 'ADD_TO_PATH') { $null = Get-BoolInput $b }
+    foreach ($b in 'CACHE', 'ADD_TO_PATH') { $null = Get-BoolInput $b }
+    $verifySignature = Get-BoolInput 'VERIFY_SIGNATURE'
     $downloadMinutes = Get-MinutesInput 'DOWNLOAD_TIMEOUT_MINUTES'
     $null = Get-MinutesInput 'INSTALL_TIMEOUT_MINUTES'
     $dirInput = "$env:INPUT_INSTALL_DIR".Trim()
-    if ($dirInput -and -not [IO.Path]::IsPathFullyQualified($dirInput)) { throw "Invalid install-dir '$dirInput': expected an absolute path." }
+    $null = Resolve-InstallDir -Value $dirInput -Release '0'  # validate before any network access
 
     $deadline = Get-Deadline $downloadMinutes
     $work = New-Item -ItemType Directory -Force (Join-Path $env:RUNNER_TEMP 'setup-qgis-osgeo4w')
@@ -221,14 +248,14 @@ function Invoke-ResolvePhase {
     }
 
     $version = Get-InstallerVersion $installer
-    $installDir = if ($dirInput) { [IO.Path]::GetFullPath($dirInput).TrimEnd('\') } else { Join-Path $env:ProgramFiles "QGIS $($version.Release)" }
+    $installDir = Resolve-InstallDir -Value $dirInput -Release $version.Release
     $imageOS = if ($env:ImageOS) { $env:ImageOS } else { 'unknown' }
     Write-StepOutput @{
         'installer'        = $installer
         'version'          = $version.Full
         'sha256'           = $sha256
         'install-dir'      = $installDir
-        'cache-key'        = Get-CacheKey -Installer $installer -Sha256 $sha256 -InstallDir $installDir -ImageOS $imageOS
+        'cache-key'        = Get-CacheKey -Installer $installer -Sha256 $sha256 -InstallDir $installDir -ImageOS $imageOS -SignatureChecked $verifySignature
         'resolve-seconds'  = [int] $sw.Elapsed.TotalSeconds
         'resolved-at'      = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
     }
@@ -251,7 +278,9 @@ function Invoke-InstallPhase {
         $sw = [Diagnostics.Stopwatch]::StartNew()
         try {
             $layout = Invoke-Group 'Check the cached QGIS tree' { Test-QgisInstall $dir (Get-Deadline $installMinutes) }
-            $signer = 'verified when cached'
+            # The key ties the tree to a verified MSI, but anything that can write this repo's
+            # cache could have stored it; nothing here re-checks it (see README, Security).
+            $signer = 'restored from cache, not re-verified'
         } catch {
             Write-Host "::warning title=setup-qgis-osgeo4w::The cached QGIS tree failed its check ($($_.Exception.Message)); reinstalling from the MSI. Delete the bad entry with: gh cache delete $key"
             $cacheState = 'hit, failed check, reinstalled'
@@ -285,7 +314,7 @@ function Invoke-InstallPhase {
             # Checked on the final .msi name: Windows picks the signature format from the file type.
             $sig = Get-AuthenticodeSignature -LiteralPath $msi
             $subject = if ($sig.SignerCertificate) { $sig.SignerCertificate.Subject } else { '' }
-            if ($sig.Status -ne 'Valid' -or -not (Test-OsgeoSigner $subject)) {
+            if ($sig.Status -ne 'Valid' -or -not (Test-OsgeoSigner $sig.SignerCertificate)) {
                 Remove-Item -LiteralPath $msi -Force
                 throw "Authenticode check failed for ${installer}: status $($sig.Status), signer '$subject'. Set verify-signature: false only if you trust this file anyway."
             }
