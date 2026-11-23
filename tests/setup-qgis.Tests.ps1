@@ -109,6 +109,12 @@ Test-Case 'signer check accepts both certificate subject styles' {
     Assert-Equal $false (Test-OsgeoSigner 'CN=x, O=The Open Source Geospatial Foundation Fake, C=US')
 }
 
+Test-Case 'action.yml description fits the Marketplace limit (< 125 chars, one line)' {
+    $m = [regex]::Match((Get-Content -Raw (Join-Path $PSScriptRoot '..' 'action.yml')), '(?m)^description: ([^>|\s].*)$')  # not a >- / | block scalar
+    if (-not $m.Success) { throw 'top-level description must be a single plain line' }
+    if ($m.Groups[1].Value.Length -ge 125) { throw "description is $($m.Groups[1].Value.Length) chars" }
+}
+
 $pwshExe = (Get-Process -Id $PID).Path
 Test-Case 'deadline helper returns the exit code' {
     Assert-Equal 3 (Invoke-WithDeadline -FilePath $pwshExe -Arguments '-NoProfile -Command exit 3' -Deadline ([datetime]::MaxValue))

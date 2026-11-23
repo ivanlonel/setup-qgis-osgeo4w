@@ -1,7 +1,5 @@
 name: Setup QGIS OSGeo4W
-description: >-
-  Install QGIS on Windows runners from the official OSGeo4W MSI (download.osgeo.org), verified by
-  SHA-256 and Authenticode, with the installed tree cached between runs.
+description: Install QGIS on Windows runners from the official OSGeo4W MSI, verified by SHA-256 and Authenticode, and cached.
 author: Ivan Lonel
 branding:
   icon: map
